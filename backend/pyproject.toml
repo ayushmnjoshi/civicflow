@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]          # makes `app` importable without install
+log_cli = true
+log_cli_level = "WARNING"

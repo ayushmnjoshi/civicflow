@@ -1,0 +1,52 @@
+# ── Environment ──────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+.pytest_cache/
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+*.egg
+
+# ── Node / Frontend ──────────────────────────────────────────
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+.npm
+.yarn/cache
+.pnp.*
+
+# ── IDE & OS ─────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ── Testing & Coverage ───────────────────────────────────────
+.coverage
+htmlcov/
+.pytest_cache/
+coverage/
+*.lcov
+
+# ── Docker ───────────────────────────────────────────────────
+*.log
+
+# ── Storage uploads (local dev) ──────────────────────────────
+storage/*
+!storage/.gitkeep

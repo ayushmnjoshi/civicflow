@@ -1,0 +1,114 @@
+"""FastAPI application — main entry point.
+
+Usage:
+    uvicorn app.main:app --reload          (dev, from backend/)
+    uvicorn app.main:create_app() --reload (also works)
+"""
+
+import logging
+import time
+
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
+
+from app.config import settings
+from app.routers import auth, health
+
+# ── logging ───────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO if settings.app_env != "production" else logging.WARNING,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
+
+
+# ── factory ───────────────────────────────────────────────────────────────────
+
+def create_app() -> FastAPI:
+    """Application factory — creates and configures the FastAPI instance."""
+
+    app = FastAPI(
+        title="CivicFlow API",
+        description="AI-powered civic services platform.",
+        version="0.1.0",
+        docs_url="/docs",
+        redoc_url="/redoc",
+    )
+
+    # ── exception handlers ────────────────────────────────────────────────────
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(
+        request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        logger.warning("Validation error on %s: %s", request.url, exc.errors())
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "error": {
+                    "code": status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "message": "Request validation failed.",
+                    "detail": exc.errors(),
+                }
+            },
+        )
+
+    @app.exception_handler(SQLAlchemyError)
+    async def sqlalchemy_exception_handler(
+        request: Request, exc: SQLAlchemyError
+    ) -> JSONResponse:
+        logger.error("Database error on %s: %s", request.url, exc, exc_info=False)
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "error": {
+                    "code": status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "message": "Database unavailable.",
+                }
+            },
+        )
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(
+        request: Request, exc: Exception
+    ) -> JSONResponse:
+        logger.exception("Unhandled error on %s", request.url)
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "error": {
+                    "code": status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    "message": "An unexpected error occurred.",
+                }
+            },
+        )
+
+    # ── request logging middleware ────────────────────────────────────────────
+
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next):
+        start = time.perf_counter()
+        response = await call_next(request)
+        ms = (time.perf_counter() - start) * 1000
+        logger.info(
+            "%s %s → %d  (%.1f ms)",
+            request.method,
+            request.url.path,
+            response.status_code,
+            ms,
+        )
+        return response
+
+    # ── routers ───────────────────────────────────────────────────────────────
+    app.include_router(health.router)
+    app.include_router(auth.router)
+
+    return app
+
+
+# Module-level app instance used by uvicorn directly:
+#   uvicorn app.main:app --reload
+app = create_app()
