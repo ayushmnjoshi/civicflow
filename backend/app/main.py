@@ -8,13 +8,13 @@ Usage:
 import logging
 import time
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
-from app.routers import auth, health
+from app.routers import applications, auth, health
 
 # ── logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -39,6 +39,23 @@ def create_app() -> FastAPI:
     )
 
     # ── exception handlers ────────────────────────────────────────────────────
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(
+        request: Request, exc: HTTPException
+    ) -> JSONResponse:
+        """Convert all HTTPException instances to the standard error shape."""
+        msg = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        return JSONResponse(
+            status_code=exc.status_code,
+            headers=dict(exc.headers) if exc.headers else None,
+            content={
+                "error": {
+                    "code": exc.status_code,
+                    "message": msg,
+                }
+            },
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(
@@ -105,6 +122,7 @@ def create_app() -> FastAPI:
     # ── routers ───────────────────────────────────────────────────────────────
     app.include_router(health.router)
     app.include_router(auth.router)
+    app.include_router(applications.router)
 
     return app
 

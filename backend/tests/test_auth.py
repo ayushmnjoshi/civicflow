@@ -189,7 +189,10 @@ class TestLogin:
             json={"email": "nobody@example.com", "password": "securepass1"},
         )
         assert r_wrong_pw.status_code == r_unknown.status_code == 401
-        assert r_wrong_pw.json()["detail"] == r_unknown.json()["detail"]
+        assert (
+            r_wrong_pw.json()["error"]["message"]
+            == r_unknown.json()["error"]["message"]
+        )
 
     def test_no_password_hash_in_response(self, client):
         _register(client)

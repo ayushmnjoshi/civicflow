@@ -74,16 +74,9 @@ def require_roles(*allowed: str):
         role_name = role_row.name if role_row else ""
 
         if role_name not in allowed:
-            from fastapi.responses import JSONResponse  # local import
-
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "error": {
-                        "code": status.HTTP_403_FORBIDDEN,
-                        "message": "You do not have permission to perform this action.",
-                    }
-                },
+                detail="You do not have permission to perform this action.",
             )
 
         return current_user
