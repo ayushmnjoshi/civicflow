@@ -122,6 +122,14 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
     stored_hash = user.password_hash if user else _DUMMY_HASH
     password_ok = verify_password(payload.password, stored_hash)
 
+    # System user has an unusable hash — login always fails regardless.
+    # Explicitly check role name so the behaviour is guaranteed even if somehow
+    # the hash format changed.
+    if user is not None:
+        _user_role = _get_role_name(db, user.role_id)
+        if _user_role == "system":
+            password_ok = False
+
     if user is None or not password_ok:
         raise _INVALID
 

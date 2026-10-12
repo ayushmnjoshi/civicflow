@@ -1,4 +1,4 @@
-"""Seed script — inserts the four roles and two sample departments.
+"""Seed script — inserts roles, departments, and the system user.
 
 Usage (from backend/ directory):
     python -m database.seed
@@ -7,6 +7,7 @@ Usage (from backend/ directory):
 """
 
 import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -41,6 +42,7 @@ def seed() -> None:
             {"name": "officer"},
             {"name": "dept_head"},
             {"name": "admin"},
+            {"name": "system"},
         ]
         new_roles = [r for r in roles_to_insert if r["name"] not in existing_roles]
         if new_roles:
@@ -74,6 +76,41 @@ def seed() -> None:
             )
         else:
             print("Departments already seeded — skipping.")
+
+        # ── system user ────────────────────────────────────────────────────
+        # This account has an unusable password — the random secret is generated
+        # and discarded here; it is never logged or stored anywhere.
+        existing_system = session.execute(
+            text("SELECT id FROM users WHERE email = 'system@civicflow.internal'")
+        ).fetchone()
+
+        if existing_system is None:
+            import bcrypt  # only needed during seeding
+
+            system_role_id = session.execute(
+                text("SELECT id FROM roles WHERE name = 'system'")
+            ).scalar()
+
+            # Generate and immediately discard a random secret — nobody can log in
+            _throwaway = secrets.token_bytes(64)
+            unusable_hash = bcrypt.hashpw(_throwaway, bcrypt.gensalt(rounds=12)).decode()
+            del _throwaway  # no longer needed
+
+            session.execute(
+                text(
+                    "INSERT INTO users (email, password_hash, role_id, full_name)"
+                    " VALUES (:email, :password_hash, :role_id, :full_name)"
+                ),
+                {
+                    "email": "system@civicflow.internal",
+                    "password_hash": unusable_hash,
+                    "role_id": system_role_id,
+                    "full_name": "CivicFlow System",
+                },
+            )
+            print("Inserted system user: system@civicflow.internal")
+        else:
+            print("System user already seeded — skipping.")
 
         session.commit()
         print("Seed complete.")

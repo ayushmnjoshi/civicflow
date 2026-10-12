@@ -4,9 +4,8 @@ Rules
 -----
 - Every status change happens in ONE transaction: lock row → validate → update
   status + updated_at → insert history row.  If any step fails, nothing saved.
-- changed_by is always a real user id (never NULL — the DB has NOT NULL on that
-  column).  For "system" transitions triggered by the create flow, we pass the
-  citizen's user id as the actor so the constraint is satisfied.
+- changed_by is always a real user id — for "system" transitions the system
+  user's id is used (seeded by database/seed/seed.py).
 - The state machine is the single source of truth for legal transitions.
 """
 
@@ -18,12 +17,14 @@ from datetime import datetime, timezone
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.constants import Priority
 from app.models.application import Application, ApplicationStatus
 from app.models.application_status_history import ApplicationStatusHistory
 from app.models.assignment import Assignment
 from app.models.department import Department
 from app.models.officer import Officer
 from app.services.state_machine import InvalidTransitionError, validate_transition
+from app.services.system_actor import get_system_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -72,18 +73,20 @@ def create_application(
       4. History row: SUBMITTED → DOCUMENT_PENDING, changed_by = citizen.
       5. Commit.
     """
+    system_user_id = get_system_user_id(db)
+
     app = Application(
         citizen_id=citizen_id,
         department_id=department_id,
         service_type=service_type,
         status=ApplicationStatus.SUBMITTED,
-        priority=0,          # MEDIUM default
+        priority=Priority.MEDIUM.value,  # 1
         is_duplicate_flag=False,
     )
     db.add(app)
     db.flush()  # get app.id
 
-    # History: initial creation
+    # History row 1: citizen submitted the application
     _add_history(
         db,
         application_id=app.id,
@@ -93,7 +96,6 @@ def create_application(
     )
 
     # System auto-advance to DOCUMENT_PENDING
-    # actor="system" is validated, but changed_by uses citizen_id (NOT NULL constraint)
     validate_transition(
         ApplicationStatus.SUBMITTED.value,
         ApplicationStatus.DOCUMENT_PENDING.value,
@@ -102,12 +104,13 @@ def create_application(
     app.status = ApplicationStatus.DOCUMENT_PENDING
     app.updated_at = func.now()
 
+    # History row 2: system actor advanced the status
     _add_history(
         db,
         application_id=app.id,
         from_status=ApplicationStatus.SUBMITTED.value,
         to_status=ApplicationStatus.DOCUMENT_PENDING.value,
-        changed_by=citizen_id,
+        changed_by=system_user_id,
     )
 
     db.commit()

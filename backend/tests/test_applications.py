@@ -250,10 +250,15 @@ class TestCreateApplication:
         assert r.status_code == 200
         history = r.json()["status_history"]
         assert len(history) == 2
+        # Row 1: citizen created the application
         assert history[0]["from_status"] is None
         assert history[0]["to_status"] == "SUBMITTED"
+        assert history[0]["changed_by"] == citizen.id
+        # Row 2: system advanced to DOCUMENT_PENDING
         assert history[1]["from_status"] == "SUBMITTED"
         assert history[1]["to_status"] == "DOCUMENT_PENDING"
+        # system user id != citizen id
+        assert history[1]["changed_by"] != citizen.id
 
     def test_client_supplied_citizen_id_ignored(self, client, db_session):
         """Any citizen_id in the body is ignored — server uses token."""
@@ -591,7 +596,7 @@ class TestAtomicity:
             department_id=dept.id,
             service_type="Test",
             status=ApplicationStatus.ASSIGNED,
-            priority=0,
+            priority=1,   # Priority.MEDIUM
             is_duplicate_flag=False,
         )
         db_session.add(app_obj)
@@ -624,3 +629,101 @@ class TestAtomicity:
         db_session.expire(app_obj)
         db_session.refresh(app_obj)
         assert app_obj.status == original_status
+
+
+# ══════════════════════════════════════════════════════════════════
+# Part 7 — Priority labels and system user
+# ══════════════════════════════════════════════════════════════════
+
+class TestPriorityAndSystemUser:
+
+    # ── Priority label output ───────────────────────────────────────────────────
+
+    def test_priority_label_is_medium(self, client, db_session):
+        """Newly created applications show 'MEDIUM', not the integer 1."""
+        citizen = _make_user(db_session, "citizen", "prio_c1@test.dev")
+        dept = _get_dept(db_session)
+        body = _create_app_via_api(client, citizen, dept.id)
+        assert body["priority"] == "MEDIUM"
+
+    def test_priority_label_in_detail_response(self, client, db_session):
+        citizen = _make_user(db_session, "citizen", "prio_c2@test.dev")
+        dept = _get_dept(db_session)
+        body = _create_app_via_api(client, citizen, dept.id)
+        r = client.get(f"/applications/{body['id']}", headers=_auth(citizen))
+        assert r.json()["priority"] == "MEDIUM"
+
+    def test_priority_label_in_list(self, client, db_session):
+        citizen = _make_user(db_session, "citizen", "prio_c3@test.dev")
+        dept = _get_dept(db_session)
+        _create_app_via_api(client, citizen, dept.id)
+        items = client.get("/applications", headers=_auth(citizen)).json()
+        assert len(items) >= 1
+        assert items[0]["priority"] == "MEDIUM"
+
+    def test_priority_filter_medium_works(self, client, db_session):
+        citizen = _make_user(db_session, "citizen", "prio_c4@test.dev")
+        dept = _get_dept(db_session)
+        _create_app_via_api(client, citizen, dept.id)
+        r = client.get("/applications?priority=MEDIUM", headers=_auth(citizen))
+        assert r.status_code == 200
+        assert all(i["priority"] == "MEDIUM" for i in r.json())
+
+    def test_invalid_priority_filter_returns_422(self, client, db_session):
+        citizen = _make_user(db_session, "citizen", "prio_c5@test.dev")
+        r = client.get("/applications?priority=INVALID", headers=_auth(citizen))
+        assert r.status_code == 422
+
+    # ── System user as changed_by on system transitions ───────────────────
+
+    def test_system_user_is_changed_by_on_document_pending_row(self, client, db_session):
+        """Row 1 (SUBMITTED) has citizen; row 2 (DOCUMENT_PENDING) has system user."""
+        from app.models.user import User as _User
+        system_user = (
+            db_session.query(_User)
+            .filter(_User.email == "system@civicflow.internal")
+            .first()
+        )
+        assert system_user is not None, "System user not seeded."
+
+        citizen = _make_user(db_session, "citizen", "sys_c1@test.dev")
+        dept = _get_dept(db_session)
+        body = _create_app_via_api(client, citizen, dept.id)
+        r = client.get(f"/applications/{body['id']}", headers=_auth(citizen))
+        history = r.json()["status_history"]
+
+        assert history[0]["changed_by"] == citizen.id        # citizen created it
+        assert history[1]["changed_by"] == system_user.id    # system advanced it
+
+    # ── System user login must fail ────────────────────────────────────
+
+    def test_system_user_cannot_login(self, client):
+        """Even knowing the email, login must always return 401."""
+        r = client.post(
+            "/auth/login",
+            json={"email": "system@civicflow.internal", "password": "anything"},
+        )
+        assert r.status_code == 401
+
+    def test_system_user_cannot_login_with_empty_password(self, client):
+        r = client.post(
+            "/auth/login",
+            json={"email": "system@civicflow.internal", "password": "        "},
+        )
+        assert r.status_code == 401
+
+    # ── Registration cannot produce a system role user ─────────────────
+
+    def test_register_always_creates_citizen_not_system(self, client):
+        """No matter what role the client requests, the result is always citizen."""
+        r = client.post(
+            "/auth/register",
+            json={
+                "email": "attempt_system@test.dev",
+                "password": "Test@1234",
+                "full_name": "Hacker",
+                "role": "system",          # should be silently ignored
+            },
+        )
+        assert r.status_code == 201
+        assert r.json()["role"] == "citizen"

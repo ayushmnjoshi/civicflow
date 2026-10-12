@@ -29,7 +29,7 @@ class ApplicationResponse(BaseModel):
     department_id: int
     service_type: str
     status: str
-    priority: int
+    priority: str            # label: "LOW" | "MEDIUM" | "HIGH"
     created_at: datetime
     updated_at: datetime
 

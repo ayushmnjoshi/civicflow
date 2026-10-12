@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user, require_citizen, require_officer
+from app.constants import Priority
 from app.dependencies import get_db
 from app.models.application import Application
 from app.models.department import Department
@@ -46,7 +47,7 @@ def _to_response(app: Application) -> ApplicationResponse:
         department_id=app.department_id,
         service_type=app.service_type,
         status=app.status.value,
-        priority=app.priority,
+        priority=Priority(app.priority).name,
         created_at=app.created_at,
         updated_at=app.updated_at,
     )
@@ -59,7 +60,7 @@ def _to_detail(app: Application, history) -> ApplicationDetailResponse:
         department_id=app.department_id,
         service_type=app.service_type,
         status=app.status.value,
-        priority=app.priority,
+        priority=Priority(app.priority).name,
         created_at=app.created_at,
         updated_at=app.updated_at,
         status_history=[
@@ -154,20 +155,31 @@ def get_application(
 )
 def list_applications(
     status_filter: str | None = Query(default=None, alias="status"),
-    priority: int | None = Query(default=None),
+    priority: str | None = Query(default=None, description="LOW | MEDIUM | HIGH"),
     department_id: int | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[ApplicationResponse]:
+    # Validate and convert the priority label to its integer value
+    priority_int: int | None = None
+    if priority is not None:
+        try:
+            priority_int = Priority.from_label(priority).value
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            )
+
     role = _role_name(db, current_user)
     apps = svc.list_applications(
         db,
         viewer_role=role,
         viewer_user_id=current_user.id,
         status=status_filter,
-        priority=priority,
+        priority=priority_int,
         department_id=department_id,
         limit=limit,
         offset=offset,

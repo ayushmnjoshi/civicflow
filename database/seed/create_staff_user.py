@@ -48,6 +48,7 @@ from app.models.role import Role
 from app.models.user import User
 
 _STAFF_ROLES = {"officer", "dept_head", "admin"}
+# "system" is intentionally excluded — it is seeded once by database/seed/seed.py
 
 
 def _parse_args() -> argparse.Namespace:
