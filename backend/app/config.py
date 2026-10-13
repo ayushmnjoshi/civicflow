@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
 
+    # ── MinIO / object storage ────────────────────────────────
+    minio_endpoint: str = "localhost:9000"
+    minio_access_key: str = "minioadmin"
+    minio_secret_key: str = "minioadmin"
+    minio_bucket: str = "civicflow"
+    minio_secure: bool = False
+    max_upload_mb: int = 5
+
 
 # Single instance imported everywhere
 settings = Settings()

@@ -26,3 +26,9 @@ class Priority(int, enum.Enum):
     @property
     def label(self) -> str:
         return self.name
+
+
+# ── Document validation statuses ─────────────────────────────────────────────
+# Stored as plain strings in the documents.validation_status column.
+
+VALIDATION_STATUS_PENDING = "PENDING"

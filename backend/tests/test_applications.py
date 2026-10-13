@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.security import create_access_token, hash_password
 from app.config import settings
+from app.constants import Priority
 from app.database import engine
 from app.dependencies import get_db
 from app.main import app
@@ -32,6 +33,7 @@ from app.services.state_machine import (
     can_transition,
     validate_transition,
 )
+from app.services.system_actor import get_system_user_id
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -596,7 +598,7 @@ class TestAtomicity:
             department_id=dept.id,
             service_type="Test",
             status=ApplicationStatus.ASSIGNED,
-            priority=1,   # Priority.MEDIUM
+            priority=Priority.MEDIUM.value,
             is_duplicate_flag=False,
         )
         db_session.add(app_obj)
@@ -727,3 +729,33 @@ class TestPriorityAndSystemUser:
         )
         assert r.status_code == 201
         assert r.json()["role"] == "citizen"
+
+    # ── get_system_user_id raises when system user missing ─────────────
+
+    def test_get_system_user_id_raises_when_missing(self, db_session, monkeypatch):
+        """get_system_user_id must raise RuntimeError if the system user is absent.
+
+        We use monkeypatch to make the query return None without deleting the
+        real DB row.  The transaction is rolled back by the db_session fixture.
+        """
+        import app.services.system_actor as _sa_mod
+
+        original_query = db_session.query
+
+        def _patched_query(model, *args, **kwargs):
+            from app.models.user import User as _User
+            q = original_query(model, *args, **kwargs)
+            if model is _User:
+                # Wrap to override .filter().first() only for system email
+                class _NoneFilter:
+                    def filter(self, *a, **kw):
+                        return self
+                    def first(self):
+                        return None
+                return _NoneFilter()
+            return q
+
+        monkeypatch.setattr(db_session, "query", _patched_query)
+
+        with pytest.raises(RuntimeError, match="System user"):
+            get_system_user_id(db_session)

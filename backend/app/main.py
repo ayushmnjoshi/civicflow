@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
-from app.routers import applications, auth, health
+from app.routers import applications, auth, documents, health
 
 # ── logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -123,6 +123,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(applications.router)
+    app.include_router(documents.router)
 
     return app
 
