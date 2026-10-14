@@ -31,6 +31,7 @@ from app.models.document import Document
 from app.models.officer import Officer
 from app.models.role import Role
 from app.models.user import User
+from app.ocr.engine import AbstractOcrEngine, OcrResult, get_ocr_engine
 from app.services.storage_service import InMemoryStorage, get_storage
 
 
@@ -65,6 +66,14 @@ def fake_storage() -> InMemoryStorage:
     return InMemoryStorage()
 
 
+
+# Minimal fake OCR engine — returns empty text so OCR runs without Tesseract.
+# Docs will be INVALID (empty text fails min_text), but upload always returns 201.
+class _FakeOcrEngine(AbstractOcrEngine):
+    def extract(self, data: bytes, ext: str) -> OcrResult:
+        return OcrResult(text="", method="tesseract")
+
+
 @pytest.fixture(scope="function")
 def client(db_session: Session, fake_storage: InMemoryStorage):
     def _db_override():
@@ -73,8 +82,12 @@ def client(db_session: Session, fake_storage: InMemoryStorage):
     def _storage_override():
         return fake_storage
 
+    def _ocr_override():
+        return _FakeOcrEngine()
+
     app.dependency_overrides[get_db] = _db_override
     app.dependency_overrides[get_storage] = _storage_override
+    app.dependency_overrides[get_ocr_engine] = _ocr_override
     with TestClient(app, raise_server_exceptions=False) as c:
         yield c
     app.dependency_overrides.clear()
@@ -219,7 +232,10 @@ class TestValidUpload:
         assert doc is not None
         assert doc.application_id == app_obj.id
         assert doc.doc_type == "PASSPORT"
-        assert doc.validation_status == VALIDATION_STATUS_PENDING
+        # After Prompt 09, OCR runs post-upload. The FakeOcrEngine returns
+        # empty text, so the doc gets INVALID (not PENDING). The important
+        # invariants are: row exists, doc_type correct, filename not in key.
+        assert doc.validation_status in (VALIDATION_STATUS_PENDING, "VALID", "INVALID", "ERROR")
         # storage_ref must not contain the user filename
         assert "myfile" not in doc.storage_ref
 

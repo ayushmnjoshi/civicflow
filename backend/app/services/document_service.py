@@ -130,6 +130,7 @@ def validate_file(
 def upload_document(
     db: Session,
     storage: AbstractStorage,
+    ocr=None,
     *,
     application_id: int,
     citizen_id: int,
@@ -200,7 +201,42 @@ def upload_document(
             )
         raise exc
 
+    # ── 6. Post-upload: OCR + advance (failures must never break 201) ─────────
+    if ocr is not None:
+        _run_post_upload_hooks(db, storage, doc, ocr)
+
     return doc
+
+
+def _run_post_upload_hooks(
+    db: Session,
+    storage: AbstractStorage,
+    document: Document,
+    ocr,
+) -> None:
+    """Run OCR validation and attempt to advance the application.
+
+    Called after a successful upload commit.
+    Any exception here MUST NOT affect the 201 response — log and return.
+    The caller never sees errors from this function.
+    Never logs OCR text or document content.
+    """
+    from app.services.validation_service import advance_application, process_document
+
+    try:
+        process_document(db, document, storage, ocr)
+    except Exception:
+        logger.exception(
+            "Post-upload: process_document failed doc_id=%d", document.id
+        )
+
+    try:
+        advance_application(db, document.application_id)
+    except Exception:
+        logger.exception(
+            "Post-upload: advance_application failed application_id=%d",
+            document.application_id,
+        )
 
 
 # ── Access-check helper ───────────────────────────────────────────────────────

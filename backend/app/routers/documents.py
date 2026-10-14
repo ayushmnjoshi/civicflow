@@ -18,6 +18,7 @@ from app.dependencies import get_db
 from app.models.document import Document
 from app.models.role import Role
 from app.models.user import User
+from app.ocr.engine import AbstractOcrEngine, get_ocr_engine
 from app.schemas.document import DocumentUploadResponse
 from app.services import document_service as svc
 from app.services.document_service import FileValidationError
@@ -68,6 +69,7 @@ def upload_document(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     storage: AbstractStorage = Depends(get_storage),
+    ocr: AbstractOcrEngine = Depends(get_ocr_engine),
 ) -> DocumentUploadResponse:
     # ── RBAC: only citizens may upload ───────────────────────────────────────
     role = _role_name(db, current_user)
@@ -96,6 +98,7 @@ def upload_document(
         doc = svc.upload_document(
             db,
             storage,
+            ocr,
             application_id=application_id,
             citizen_id=current_user.id,
             raw_filename=raw_filename,

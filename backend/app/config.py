@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     minio_secure: bool = False
     max_upload_mb: int = 5
 
+    # ── OCR ──────────────────────────────────────────────────────
+    tesseract_cmd: str = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    ocr_max_pages: int = 3
+    ocr_timeout_seconds: int = 30
+    ocr_min_text_chars: int = 20
+
+    # ── Internal service auth ─────────────────────────────────────
+    internal_service_token: str = ""
+
 
 # Single instance imported everywhere
 settings = Settings()

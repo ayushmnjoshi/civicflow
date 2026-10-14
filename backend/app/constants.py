@@ -32,3 +32,6 @@ class Priority(int, enum.Enum):
 # Stored as plain strings in the documents.validation_status column.
 
 VALIDATION_STATUS_PENDING = "PENDING"
+VALIDATION_STATUS_VALID   = "VALID"
+VALIDATION_STATUS_INVALID = "INVALID"
+VALIDATION_STATUS_ERROR   = "ERROR"
