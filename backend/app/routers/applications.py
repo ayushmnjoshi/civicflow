@@ -41,7 +41,7 @@ def _role_name(db: Session, user: User) -> str:
     return role.name if role else ""
 
 
-def _to_response(app: Application) -> ApplicationResponse:
+def _to_response(app: Application, viewer_role: str) -> ApplicationResponse:
     return ApplicationResponse(
         id=app.id,
         citizen_id=app.citizen_id,
@@ -49,6 +49,11 @@ def _to_response(app: Application) -> ApplicationResponse:
         service_type=app.service_type,
         status=app.status.value,
         priority=Priority(app.priority).name,
+        is_duplicate_flag=(
+            app.is_duplicate_flag
+            if viewer_role in ("officer", "dept_head", "admin")
+            else None
+        ),
         created_at=app.created_at,
         updated_at=app.updated_at,
     )
@@ -100,6 +105,11 @@ def _to_detail(
         service_type=app.service_type,
         status=app.status.value,
         priority=Priority(app.priority).name,
+        is_duplicate_flag=(
+            app.is_duplicate_flag
+            if viewer_role in ("officer", "dept_head", "admin")
+            else None
+        ),
         created_at=app.created_at,
         updated_at=app.updated_at,
         status_history=history_entries,
@@ -149,9 +159,10 @@ def create_application(
         citizen_id=current_user.id,
         service_type=payload.service_type,
         department_id=payload.department_id,
+        urgent=payload.urgent,
     )
-    logger.info("Application %d created by citizen %d", app.id, current_user.id)
-    return _to_response(app)
+    logger.info("application_id=%d reason_code=created", app.id)
+    return _to_response(app, "citizen")
 
 
 # ── GET /applications/{id} ────────────────────────────────────────────────────
@@ -218,7 +229,7 @@ def list_applications(
         limit=limit,
         offset=offset,
     )
-    return [_to_response(a) for a in apps]
+    return [_to_response(a, role) for a in apps]
 
 
 # ── PATCH /applications/{id}/status ──────────────────────────────────────────

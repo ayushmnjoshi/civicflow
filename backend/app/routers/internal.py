@@ -25,6 +25,7 @@ from app.schemas.ai import OcrRequest, OcrResponse, ValidateRequest, ValidateRes
 from app.services.storage_service import AbstractStorage, get_storage
 from app.services.validation_service import process_document
 from app.services.application_service import get_required_documents_for_application
+from app.services.rule_engine_service import reevaluate_priorities
 
 logger = logging.getLogger(__name__)
 
@@ -118,3 +119,12 @@ def run_validate(
         validation_result=result,
         missing_docs=result["missing_docs"],
     )
+
+
+@router.post(
+    "/priority/reevaluate",
+    include_in_schema=False,
+)
+def reevaluate_priority(db: Session = Depends(get_db)) -> dict[str, int]:
+    """Raise overdue non-terminal applications to HIGH priority."""
+    return {"updated": reevaluate_priorities(db)}

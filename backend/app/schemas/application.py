@@ -42,6 +42,7 @@ class ApplicationResponse(BaseModel):
     service_type: str
     status: str
     priority: str            # label: "LOW" | "MEDIUM" | "HIGH"
+    is_duplicate_flag: bool | None
     created_at: datetime
     updated_at: datetime
 
@@ -67,6 +68,7 @@ class ApplicationCreateRequest(BaseModel):
 
     service_type: str = Field(min_length=1)
     department_id: int
+    urgent: bool = False
 
 
 class StatusUpdateRequest(BaseModel):

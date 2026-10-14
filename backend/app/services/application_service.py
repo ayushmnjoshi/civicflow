@@ -29,6 +29,7 @@ from app.models.role import Role
 from app.models.user import User
 from app.services.state_machine import InvalidTransitionError, validate_transition
 from app.services.system_actor import get_system_user_id
+from app.services.rule_engine_service import apply_rules_on_create
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ def create_application(
     citizen_id: int,
     service_type: str,
     department_id: int,
+    urgent: bool = False,
 ) -> Application:
     """Create an application and immediately advance it to DOCUMENT_PENDING.
 
@@ -89,6 +91,17 @@ def create_application(
     )
     db.add(app)
     db.flush()  # get app.id
+
+    # Urgency is self-declared; an officer can change priority later.
+    try:
+        apply_rules_on_create(db, app, db.get(User, citizen_id), urgent)
+    except Exception:
+        # A broken rules engine must never prevent a citizen's submission.
+        app.priority = Priority.MEDIUM.value
+        app.is_duplicate_flag = False
+        logger.exception(
+            "application_id=%d reason_code=rule_engine_error", app.id
+        )
 
     # History row 1: citizen submitted the application
     _add_history(
