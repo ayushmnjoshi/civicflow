@@ -14,7 +14,6 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.ai.rules import get_required_doc_types
 from app.ai.validator import validate_application
 from app.auth.service_token import require_service_token
 from app.dependencies import get_db
@@ -25,6 +24,7 @@ from app.ocr.engine import AbstractOcrEngine, get_ocr_engine
 from app.schemas.ai import OcrRequest, OcrResponse, ValidateRequest, ValidateResponse
 from app.services.storage_service import AbstractStorage, get_storage
 from app.services.validation_service import process_document
+from app.services.application_service import get_required_documents_for_application
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ def run_validate(
         }
         for d in docs
     ]
-    required = get_required_doc_types(app.service_type)
+    required = get_required_documents_for_application(db, app)
     result = validate_application(required, doc_dicts)
 
     return ValidateResponse(

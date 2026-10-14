@@ -130,8 +130,8 @@ def validate_file(
 def upload_document(
     db: Session,
     storage: AbstractStorage,
-    ocr=None,
     *,
+    ocr,
     application_id: int,
     citizen_id: int,
     raw_filename: str,
@@ -202,10 +202,10 @@ def upload_document(
         raise exc
 
     # ── 6. Post-upload: OCR + advance (failures must never break 201) ─────────
-    if ocr is not None:
-        _run_post_upload_hooks(db, storage, doc, ocr)
+    _run_post_upload_hooks(db, storage, doc, ocr)
 
     return doc
+
 
 
 def _run_post_upload_hooks(

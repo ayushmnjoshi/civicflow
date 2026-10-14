@@ -255,12 +255,14 @@ class TestCreateApplication:
         # Row 1: citizen created the application
         assert history[0]["from_status"] is None
         assert history[0]["to_status"] == "SUBMITTED"
-        assert history[0]["changed_by"] == citizen.id
+        assert history[0]["actor_role"] == "citizen"
+        assert history[0]["actor_name"] is None       # citizens never see person names
         # Row 2: system advanced to DOCUMENT_PENDING
         assert history[1]["from_status"] == "SUBMITTED"
         assert history[1]["to_status"] == "DOCUMENT_PENDING"
-        # system user id != citizen id
-        assert history[1]["changed_by"] != citizen.id
+        assert history[1]["actor_role"] == "system"
+        assert history[1]["actor_name"] == "System"
+
 
     def test_client_supplied_citizen_id_ignored(self, client, db_session):
         """Any citizen_id in the body is ignored — server uses token."""
@@ -679,7 +681,11 @@ class TestPriorityAndSystemUser:
     # ── System user as changed_by on system transitions ───────────────────
 
     def test_system_user_is_changed_by_on_document_pending_row(self, client, db_session):
-        """Row 1 (SUBMITTED) has citizen; row 2 (DOCUMENT_PENDING) has system user."""
+        """Row 1 (SUBMITTED) has citizen; row 2 (DOCUMENT_PENDING) has system user.
+
+        DB checks use the history table directly.  API checks use actor_role.
+        """
+        from app.models.application_status_history import ApplicationStatusHistory
         from app.models.user import User as _User
         system_user = (
             db_session.query(_User)
@@ -691,11 +697,24 @@ class TestPriorityAndSystemUser:
         citizen = _make_user(db_session, "citizen", "sys_c1@test.dev")
         dept = _get_dept(db_session)
         body = _create_app_via_api(client, citizen, dept.id)
+
+        # ── DB check: changed_by column ────────────────────────────────────
+        hist_rows = (
+            db_session.query(ApplicationStatusHistory)
+            .filter(ApplicationStatusHistory.application_id == body["id"])
+            .order_by(ApplicationStatusHistory.changed_at.asc())
+            .all()
+        )
+        assert hist_rows[0].changed_by == citizen.id        # citizen created it
+        assert hist_rows[1].changed_by == system_user.id    # system advanced it
+
+        # ── API check: actor_role / actor_name ─────────────────────────────
         r = client.get(f"/applications/{body['id']}", headers=_auth(citizen))
         history = r.json()["status_history"]
+        assert history[0]["actor_role"] == "citizen"
+        assert history[1]["actor_role"] == "system"
+        assert history[1]["actor_name"] == "System"
 
-        assert history[0]["changed_by"] == citizen.id        # citizen created it
-        assert history[1]["changed_by"] == system_user.id    # system advanced it
 
     # ── System user login must fail ────────────────────────────────────
 

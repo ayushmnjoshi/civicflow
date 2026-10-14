@@ -14,6 +14,9 @@ from sqlalchemy import (
 )
 from .base import Base
 
+# Inline import to avoid circular imports (constants → models would be circular)
+from app.constants import Priority
+
 
 class ApplicationStatus(str, enum.Enum):
     SUBMITTED = "SUBMITTED"
@@ -40,7 +43,7 @@ class Application(Base):
         nullable=False,
         default=ApplicationStatus.SUBMITTED,
     )
-    priority = Column(Integer, nullable=False, default=0)
+    priority = Column(Integer, nullable=False, default=Priority.MEDIUM.value)
     is_duplicate_flag = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(

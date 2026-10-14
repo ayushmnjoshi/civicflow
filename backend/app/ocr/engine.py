@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import io
 import logging
-import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
@@ -73,7 +72,11 @@ class TesseractOcrEngine(AbstractOcrEngine):
     def _ocr_image_bytes(self, image_bytes: bytes) -> str:
         """Run Tesseract on raw image bytes with a timeout.
 
-        Uses a background thread + Timer so it works on Windows (no SIGALRM).
+        Uses pytesseract's built-in ``timeout=`` argument, which kills the
+        Tesseract child process (via ``process.kill()``) when the deadline is
+        exceeded.  This is the only approach that actually terminates the
+        subprocess on both Unix and Windows.
+
         Never passes user-controlled data to a shell.
         """
         import pytesseract
@@ -89,30 +92,25 @@ class TesseractOcrEngine(AbstractOcrEngine):
         except (UnidentifiedImageError, Exception) as exc:
             raise OcrError(f"Cannot open image: {exc}") from exc
 
-        result_holder: list[str | BaseException] = []
-
-        def _run() -> None:
-            try:
-                # lang=eng; no shell=True; no user data on command line
-                text = pytesseract.image_to_string(img, lang="eng")
-                result_holder.append(text)
-            except pytesseract.TesseractNotFoundError as e:
-                result_holder.append(TesseractNotFoundError(str(e)))
-            except Exception as e:
-                result_holder.append(OcrError(f"Tesseract failed: {e}"))
-
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
-        t.join(timeout=self._timeout_seconds)
-
-        if not result_holder:
-            raise OcrError(
-                f"Tesseract timed out after {self._timeout_seconds} seconds."
+        try:
+            # timeout= is pytesseract's native arg: it kills the process on expiry.
+            # lang=eng; no shell=True; no user data on command line.
+            text: str = pytesseract.image_to_string(
+                img, lang="eng", timeout=self._timeout_seconds
             )
-        val = result_holder[0]
-        if isinstance(val, BaseException):
-            raise val
-        return val  # type: ignore[return-value]
+            return text
+        except pytesseract.TesseractNotFoundError as exc:
+            raise TesseractNotFoundError(str(exc)) from exc
+        except RuntimeError as exc:
+            # pytesseract raises RuntimeError("Timeout") when the process is killed.
+            msg = str(exc)
+            if "timeout" in msg.lower():
+                raise OcrError(
+                    f"Tesseract timed out after {self._timeout_seconds} seconds."
+                ) from exc
+            raise OcrError(f"Tesseract failed: {exc}") from exc
+        except Exception as exc:
+            raise OcrError(f"Tesseract failed: {exc}") from exc
 
     def _pdf_embedded_text(self, data: bytes) -> tuple[str, int]:
         """Return (full_text, page_count) from a PDF using pypdfium2."""

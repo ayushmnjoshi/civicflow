@@ -98,7 +98,7 @@ def upload_document(
         doc = svc.upload_document(
             db,
             storage,
-            ocr,
+            ocr=ocr,
             application_id=application_id,
             citizen_id=current_user.id,
             raw_filename=raw_filename,

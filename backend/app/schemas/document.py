@@ -41,6 +41,18 @@ class DocumentUploadResponse(BaseModel):
     storage_ref: str
 
 
+class DocumentSummary(BaseModel):
+    """Document summary for embedding in application detail responses.
+
+    Never exposes storage_ref or extracted text.
+    """
+
+    id: int
+    doc_type: str
+    original_filename: str
+    validation_status: str
+    uploaded_at: datetime
+
 class DocumentResponse(BaseModel):
     """Flat document summary (for internal use / future list endpoint)."""
 

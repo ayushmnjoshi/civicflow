@@ -22,6 +22,7 @@ from app.schemas.application import (
     StatusHistoryEntry,
     StatusUpdateRequest,
 )
+from app.schemas.document import DocumentSummary
 from app.services import application_service as svc
 from app.services.state_machine import (
     InvalidTransitionError,
@@ -53,7 +54,45 @@ def _to_response(app: Application) -> ApplicationResponse:
     )
 
 
-def _to_detail(app: Application, history) -> ApplicationDetailResponse:
+def _to_detail(
+    db: Session,
+    app: Application,
+    history,
+    viewer_role: str,
+) -> ApplicationDetailResponse:
+    # Build history entries with actor resolution
+    history_entries = []
+    for h in history:
+        actor_role, actor_name = svc.resolve_history_actor(db, h, viewer_role)
+        history_entries.append(
+            StatusHistoryEntry(
+                from_status=h.from_status,
+                to_status=h.to_status,
+                actor_role=actor_role,
+                actor_name=actor_name,
+                changed_at=h.changed_at,
+                remarks=h.remarks,
+            )
+        )
+
+    # Build document summary list
+    docs = svc.get_documents_for_application(db, app.id)
+    doc_summaries = [
+        DocumentSummary(
+            id=d.id,
+            doc_type=d.doc_type,
+            original_filename=d.original_filename,
+            validation_status=d.validation_status,
+            uploaded_at=d.uploaded_at,
+        )
+        for d in docs
+    ]
+
+    # Required / missing / invalid
+    required = svc.get_required_documents_for_application(db, app)
+    missing = svc.get_missing_documents(required, docs)
+    invalid = svc.get_invalid_documents(required, docs)
+
     return ApplicationDetailResponse(
         id=app.id,
         citizen_id=app.citizen_id,
@@ -63,16 +102,11 @@ def _to_detail(app: Application, history) -> ApplicationDetailResponse:
         priority=Priority(app.priority).name,
         created_at=app.created_at,
         updated_at=app.updated_at,
-        status_history=[
-            StatusHistoryEntry(
-                from_status=h.from_status,
-                to_status=h.to_status,
-                changed_by=h.changed_by,
-                changed_at=h.changed_at,
-                remarks=h.remarks,
-            )
-            for h in history
-        ],
+        status_history=history_entries,
+        documents=doc_summaries,
+        required_documents=required,
+        missing_documents=missing,
+        invalid_documents=invalid,
     )
 
 
@@ -143,7 +177,7 @@ def get_application(
         )
 
     history = svc.get_status_history(db, application_id)
-    return _to_detail(app, history)
+    return _to_detail(db, app, history, role)
 
 
 # ── GET /applications ─────────────────────────────────────────────────────────
@@ -219,13 +253,13 @@ def update_status(
     if allowed_actor is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Transition {old_status} \u2192 {new_status} is not defined.",
+            detail=f"Transition {old_status} → {new_status} is not defined.",
         )
     if allowed_actor != "officer":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"Transition {old_status} \u2192 {new_status} requires "
+                f"Transition {old_status} → {new_status} requires "
                 f"actor '{allowed_actor}', not 'officer'."
             ),
         )
@@ -245,5 +279,6 @@ def update_status(
             detail=str(exc),
         )
 
+    role = _role_name(db, current_user)
     history = svc.get_status_history(db, application_id)
-    return _to_detail(updated, history)
+    return _to_detail(db, updated, history, role)

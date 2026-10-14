@@ -33,6 +33,7 @@ from app.constants import (
 )
 from app.models.ai_analysis import AIAnalysis
 from app.models.application import Application, ApplicationStatus
+from app.models.department import Department
 from app.models.document import Document
 from app.models.user import User
 from app.ocr.engine import AbstractOcrEngine, OcrError
@@ -286,7 +287,12 @@ def _do_advance(db: Session, application_id: int) -> None:
         dt = doc.doc_type.strip().upper()
         by_type.setdefault(dt, []).append(doc)
 
-    required = [r.strip().upper() for r in get_required_doc_types(app.service_type)]
+    # Use the DEPARTMENT's service_type (server-controlled) — not the
+    # client-supplied applications.service_type — so citizens cannot bypass
+    # required-document checks by sending an arbitrary service_type string.
+    dept = db.get(Department, app.department_id)
+    dept_service_type = dept.service_type if dept is not None else ""
+    required = [r.strip().upper() for r in get_required_doc_types(dept_service_type)]
 
     # Check that every required type has at least one uploaded document
     if not all(r in by_type for r in required):

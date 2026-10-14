@@ -17,12 +17,16 @@ from datetime import datetime, timezone
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.constants import Priority
+from app.ai.rules import get_required_doc_types
+from app.constants import Priority, VALIDATION_STATUS_INVALID, VALIDATION_STATUS_ERROR
 from app.models.application import Application, ApplicationStatus
 from app.models.application_status_history import ApplicationStatusHistory
 from app.models.assignment import Assignment
 from app.models.department import Department
+from app.models.document import Document
 from app.models.officer import Officer
+from app.models.role import Role
+from app.models.user import User
 from app.services.state_machine import InvalidTransitionError, validate_transition
 from app.services.system_actor import get_system_user_id
 
@@ -260,3 +264,116 @@ def list_applications(
         .offset(offset)
         .all()
     )
+
+
+# ── Document detail helpers (Step 4) ─────────────────────────────────────────
+
+def get_documents_for_application(
+    db: Session, application_id: int
+) -> list[Document]:
+    """Return all documents for an application ordered by id."""
+    return (
+        db.query(Document)
+        .filter(Document.application_id == application_id)
+        .order_by(Document.id.asc())
+        .all()
+    )
+
+
+def get_required_documents_for_application(
+    db: Session, app: Application
+) -> list[str]:
+    """Return the required doc types using the DEPARTMENT's service_type."""
+    dept = db.get(Department, app.department_id)
+    dept_service_type = dept.service_type if dept is not None else ""
+    return [r.upper() for r in get_required_doc_types(dept_service_type)]
+
+
+def get_missing_documents(
+    required: list[str], documents: list[Document]
+) -> list[str]:
+    """Return required doc_types with no uploaded document (any status)."""
+    uploaded_types = {d.doc_type.strip().upper() for d in documents}
+    return [r for r in required if r not in uploaded_types]
+
+
+def get_invalid_documents(
+    required: list[str], documents: list[Document]
+) -> list[str]:
+    """Return required doc_types whose LATEST document (by id) has status INVALID or ERROR."""
+    # Build: doc_type -> latest document (highest id)
+    latest: dict[str, Document] = {}
+    for doc in documents:
+        dt = doc.doc_type.strip().upper()
+        if dt not in latest or doc.id > latest[dt].id:
+            latest[dt] = doc
+
+    result: list[str] = []
+    for req in required:
+        doc = latest.get(req)
+        if doc is not None and doc.validation_status in (
+            VALIDATION_STATUS_INVALID,
+            VALIDATION_STATUS_ERROR,
+        ):
+            result.append(req)
+    return result
+
+
+# ── Status history actor resolution (Step 5) ──────────────────────────────────
+
+_SYSTEM_EMAIL = "system@civicflow.internal"
+
+
+def _get_user_role_name(db: Session, user_id: int) -> str:
+    """Return the role name for *user_id*, or '' if not found."""
+    user = db.get(User, user_id)
+    if user is None:
+        return ""
+    role = db.get(Role, user.role_id)
+    return role.name if role else ""
+
+
+def _get_user_full_name(db: Session, user_id: int) -> str | None:
+    """Return the user's full_name, or None if not found."""
+    user = db.get(User, user_id)
+    return user.full_name if user is not None else None
+
+
+def _is_system_user(db: Session, user_id: int) -> bool:
+    """Return True if *user_id* is the system actor."""
+    user = db.get(User, user_id)
+    return user is not None and user.email == _SYSTEM_EMAIL
+
+
+def resolve_history_actor(
+    db: Session,
+    history_row: ApplicationStatusHistory,
+    viewer_role: str,
+) -> tuple[str, str | None]:
+    """Return (actor_role, actor_name) for a history row.
+
+    actor_role: "citizen" | "system" | "officer" | "dept_head" | "admin"
+    actor_name:
+      - "System"         for the system actor
+      - person's full_name  when viewer is staff (officer / dept_head / admin)
+      - null             when viewer is citizen and actor is not citizen
+    """
+    changed_by = history_row.changed_by
+
+    # Identify system user
+    if _is_system_user(db, changed_by):
+        return "system", "System"
+
+    actor_role = _get_user_role_name(db, changed_by)
+
+    # Actor names are staff-only.  Citizens can still see roles and the
+    # system label, but never a person's name (including their own).
+    is_staff_viewer = viewer_role in ("officer", "dept_head", "admin")
+
+    if is_staff_viewer:
+        name = _get_user_full_name(db, changed_by)
+    else:
+        # citizen viewer, non-citizen actor → hide name
+        name = None
+
+    return actor_role, name
