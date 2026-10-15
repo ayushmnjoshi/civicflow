@@ -19,9 +19,16 @@ from app.auth.service_token import require_service_token
 from app.dependencies import get_db
 from app.models.ai_analysis import AIAnalysis
 from app.models.application import Application
+from app.models.assignment import Assignment
 from app.models.document import Document
+from app.models.notification import Notification
+from app.models.officer import Officer
+from app.models.role import Role
+from app.models.user import User
 from app.ocr.engine import AbstractOcrEngine, get_ocr_engine
 from app.schemas.ai import OcrRequest, OcrResponse, ValidateRequest, ValidateResponse
+from app.schemas.notification import NotificationSendRequest, NotificationSendResponse
+from app.services.notification_service import get_provider
 from app.services.storage_service import AbstractStorage, get_storage
 from app.services.validation_service import process_document
 from app.services.application_service import get_required_documents_for_application
@@ -144,3 +151,116 @@ def run_assignments(db: Session = Depends(get_db)) -> dict[str, int]:
     n8n can call this on a schedule.
     """
     return run_bulk_assign(db)
+
+
+# ── POST /internal/notifications/send ────────────────────────────────────────
+
+def _get_role_name(db: Session, user: User) -> str:
+    role = db.get(Role, user.role_id)
+    return role.name if role else ""
+
+
+@router.post(
+    "/notifications/send",
+    response_model=NotificationSendResponse,
+    include_in_schema=False,
+)
+def send_notification(
+    body: NotificationSendRequest,
+    db: Session = Depends(get_db),
+) -> NotificationSendResponse:
+    """Insert, dispatch and confirm a notification.
+
+    channel must be "email"; message 1-1000 chars (validated by schema).
+    Recipient must be the application's citizen, an actively-assigned officer,
+    or a user with role dept_head or admin.  All others → 403.
+    """
+    # ── channel guard ─────────────────────────────────────────────
+    if body.channel != "email":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="channel must be 'email'.",
+        )
+
+    # ── look up application ───────────────────────────────────────
+    application: Application | None = db.get(Application, body.application_id)
+    if application is None:
+        raise _http_404("Application not found.")
+
+    # ── look up recipient ─────────────────────────────────────────
+    recipient: User | None = db.get(User, body.recipient_id)
+    if recipient is None:
+        raise _http_404("Recipient not found.")
+
+    # ── authorization check ───────────────────────────────────────
+    recipient_role = _get_role_name(db, recipient)
+
+    allowed = False
+    if recipient.id == application.citizen_id:
+        allowed = True
+    elif recipient_role in ("dept_head", "admin"):
+        allowed = True
+    elif recipient_role == "officer":
+        # Check for an active assignment
+        officer = db.query(Officer).filter(Officer.user_id == recipient.id).first()
+        if officer is not None:
+            assignment = (
+                db.query(Assignment)
+                .filter(
+                    Assignment.application_id == body.application_id,
+                    Assignment.officer_id == officer.id,
+                    Assignment.unassigned_at.is_(None),
+                )
+                .first()
+            )
+            if assignment is not None:
+                allowed = True
+
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Recipient is not authorised to receive notifications for this application.",
+        )
+
+    # ── insert notification row with status=pending ───────────────
+    notif = Notification(
+        application_id=body.application_id,
+        recipient_id=body.recipient_id,
+        channel=body.channel,
+        message=body.message,
+        status="pending",
+    )
+    db.add(notif)
+    db.commit()
+    db.refresh(notif)
+
+    # ── call the provider ─────────────────────────────────────────
+    provider = get_provider()
+    result_status, _reason = provider.send(
+        notification_id=notif.id,
+        application_id=body.application_id,
+        recipient_email=recipient.email,
+        message=body.message,
+    )
+
+    # ── update the row ────────────────────────────────────────────
+    from datetime import datetime, timezone
+
+    notif.status = result_status
+    if result_status == "sent":
+        notif.sent_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(notif)
+
+    if result_status != "sent":
+        logger.error(
+            "notification_id=%d status=failed reason_code=%s",
+            notif.id,
+            _reason,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Notification delivery failed.",
+        )
+
+    return NotificationSendResponse(notification_id=notif.id, status="sent")

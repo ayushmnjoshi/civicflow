@@ -43,6 +43,22 @@ class Settings(BaseSettings):
     # ── Internal service auth ─────────────────────────────────────
     internal_service_token: str = ""
 
+    # ── n8n webhook emitter ───────────────────────────────────────
+    n8n_webhook_url: str = ""
+    n8n_webhook_token: str = ""
+
+    # ── Notification provider ─────────────────────────────────────
+    # "log" (default) or "smtp"
+    notify_provider: str = "log"
+
+    # ── SMTP (only used when notify_provider = "smtp") ────────────
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_starttls: bool = True
+
 
 # Single instance imported everywhere
 settings = Settings()

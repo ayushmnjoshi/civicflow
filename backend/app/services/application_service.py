@@ -30,6 +30,7 @@ from app.models.user import User
 from app.services.state_machine import InvalidTransitionError, validate_transition
 from app.services.system_actor import get_system_user_id
 from app.services.rule_engine_service import apply_rules_on_create
+from app.services.event_service import emit_application_event
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,12 @@ def create_application(
 
     db.commit()
     db.refresh(app)
+    emit_application_event(
+        event_type="created",
+        application_id=app.id,
+        new_status=app.status.value,
+        citizen_id=citizen_id,
+    )
     return app
 
 
@@ -176,6 +183,12 @@ def change_status(
 
     db.commit()
     db.refresh(app)
+    emit_application_event(
+        event_type="status_changed",
+        application_id=app.id,
+        new_status=new_status,
+        citizen_id=app.citizen_id,
+    )
     return app
 
 
