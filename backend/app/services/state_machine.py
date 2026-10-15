@@ -18,6 +18,7 @@ TRANSITIONS: dict[tuple[str, str], str] = {
     ("UNDER_REVIEW", "ADDITIONAL_DOCUMENT_REQUIRED"):       "officer",   # remarks required
     ("ADDITIONAL_DOCUMENT_REQUIRED", "DOCUMENT_UPLOADED"):  "citizen",
     ("DOCUMENT_UPLOADED", "UNDER_REVIEW"):                  "system",
+    ("DOCUMENT_UPLOADED", "VALIDATING"):                    "system",    # system path: back into validation after a re-upload
     ("UNDER_REVIEW", "APPROVED"):                           "officer",
     ("UNDER_REVIEW", "REJECTED"):                           "officer",   # remarks required
 }
