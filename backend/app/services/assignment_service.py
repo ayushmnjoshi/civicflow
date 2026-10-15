@@ -23,6 +23,8 @@ from app.models.application import Application, ApplicationStatus
 from app.models.application_status_history import ApplicationStatusHistory
 from app.models.assignment import Assignment
 from app.models.officer import Officer
+from app.constants import AuditAction, AuditEntity
+from app.services.audit_service import record as audit_record
 from app.services.state_machine import validate_transition
 from app.services.system_actor import get_system_user_id
 
@@ -141,6 +143,25 @@ def _do_assign(db: Session, application: Application) -> Assignment | None:
         changed_by=system_user_id,
         remarks=None,
     ))
+
+    # Audit: assignment.create (system user, same transaction)
+    audit_record(
+        db,
+        user_id=system_user_id,
+        action=AuditAction.ASSIGNMENT_CREATE,
+        entity_type=AuditEntity.APPLICATION,
+        entity_id=app.id,
+        details={"officer_id": candidate.id},
+    )
+    # Audit: status change ASSIGNED (system, same transaction)
+    audit_record(
+        db,
+        user_id=system_user_id,
+        action=AuditAction.APPLICATION_STATUS_CHANGE,
+        entity_type=AuditEntity.APPLICATION,
+        entity_id=app.id,
+        details={"from_status": old_status, "to_status": "ASSIGNED"},
+    )
 
     db.commit()
     return assignment

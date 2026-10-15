@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
 from app.config import settings
+from app.constants import AuditAction, AuditEntity
 from app.dependencies import get_db
 from app.models.ai_analysis import AIAnalysis
 from app.models.document import Document
@@ -22,6 +23,7 @@ from app.models.user import User
 from app.ocr.engine import AbstractOcrEngine, get_ocr_engine
 from app.schemas.document import DocumentAnalysisResponse, DocumentUploadResponse
 from app.services import document_service as svc
+from app.services.audit_service import record_standalone as audit_standalone
 from app.services.document_service import FileValidationError
 from app.services.storage_service import AbstractStorage, StorageError, get_storage
 
@@ -153,6 +155,19 @@ def download_document(
     if not svc.can_access_document(db, doc, current_user, role):
         raise _http_403()
 
+    # Access granted — write audit row (standalone: must not block the download)
+    try:
+        audit_standalone(
+            db,
+            user_id=current_user.id,
+            action=AuditAction.DOCUMENT_VIEW,
+            entity_type=AuditEntity.DOCUMENT,
+            entity_id=document_id,
+            details={"document_id": document_id},
+        )
+    except Exception:
+        logger.exception("audit_callsite_failed action=document.view document_id=%d", document_id)
+
     # Determine Content-Type from stored key extension
     key = doc.storage_ref
     ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
@@ -211,6 +226,19 @@ def get_document_analysis(
     if role in ("officer", "dept_head"):
         if not svc.can_access_document(db, doc, current_user, "officer"):
             raise _http_403()
+
+    # Access granted — write audit row (standalone: must not block)
+    try:
+        audit_standalone(
+            db,
+            user_id=current_user.id,
+            action=AuditAction.DOCUMENT_ANALYSIS_VIEW,
+            entity_type=AuditEntity.DOCUMENT,
+            entity_id=document_id,
+            details={"document_id": document_id},
+        )
+    except Exception:
+        logger.exception("audit_callsite_failed action=document.analysis_view document_id=%d", document_id)
 
     # Fetch analysis row — no extracted_text returned
     analysis: AIAnalysis | None = (

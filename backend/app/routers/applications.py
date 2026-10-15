@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user, require_citizen, require_officer
-from app.constants import Priority
+from app.constants import AuditAction, AuditEntity, Priority
 from app.dependencies import get_db
 from app.models.application import Application, ApplicationStatus
 from app.models.department import Department
@@ -28,6 +28,7 @@ from app.schemas.application import (
 )
 from app.schemas.document import DocumentSummary
 from app.services import application_service as svc
+from app.services.audit_service import record as audit_record
 from app.services.state_machine import (
     InvalidTransitionError,
     TRANSITIONS,
@@ -438,6 +439,28 @@ def request_documents(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         )
+
+    # Audit: application.request_documents (officer, separate record after the commit)
+    # change_status already committed, so we use a fresh write in the same db session.
+    # We add the audit row and commit it here.
+    try:
+        audit_record(
+            db,
+            user_id=current_user.id,
+            action=AuditAction.APPLICATION_REQUEST_DOCUMENTS,
+            entity_type=AuditEntity.APPLICATION,
+            entity_id=application_id,
+            details={"doc_types": payload.doc_types},
+        )
+        db.commit()
+    except Exception:
+        logger.exception(
+            "audit_failed action=request_documents application_id=%d", application_id
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
     logger.info(
         "application_id=%d reason_code=additional_document_requested actor_id=%d",

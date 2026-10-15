@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user
 from app.auth.security import create_access_token, hash_password, verify_password
 from app.config import settings
+from app.constants import AuditAction, AuditEntity
 from app.dependencies import get_db
 from app.models.role import Role
 from app.models.user import User
@@ -21,6 +22,7 @@ from app.schemas.auth import (
     RegisterResponse,
     TokenResponse,
 )
+from app.services.audit_service import record_standalone as audit_standalone
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -87,6 +89,18 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)) -> Registe
     db.refresh(user)
     logger.info("New citizen registered: id=%d email=%s", user.id, email)
 
+    # Audit: auth.register (standalone so a write failure never blocks the response)
+    try:
+        audit_standalone(
+            db,
+            user_id=user.id,
+            action=AuditAction.AUTH_REGISTER,
+            entity_type=AuditEntity.USER,
+            entity_id=user.id,
+        )
+    except Exception:
+        logger.exception("audit_callsite_failed action=auth.register user_id=%d", user.id)
+
     return RegisterResponse(
         user_id=user.id,
         email=user.email,
@@ -125,13 +139,43 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> TokenResponse
     # System user has an unusable hash — login always fails regardless.
     # Explicitly check role name so the behaviour is guaranteed even if somehow
     # the hash format changed.
+    is_system = False
     if user is not None:
         _user_role = _get_role_name(db, user.role_id)
         if _user_role == "system":
             password_ok = False
+            is_system = True
 
     if user is None or not password_ok:
+        # Audit: login failure — only for known users (unknown email writes nothing)
+        if user is not None:
+            _failure_reason = "system_account" if is_system else "bad_password"
+            try:
+                audit_standalone(
+                    db,
+                    user_id=user.id,
+                    action=AuditAction.AUTH_LOGIN_FAILURE,
+                    entity_type=AuditEntity.USER,
+                    entity_id=user.id,
+                    details={"reason": _failure_reason},
+                )
+            except Exception:
+                logger.exception("audit_callsite_failed action=auth.login_failure user_id=%d", user.id)
+        else:
+            logger.info("login_failure reason_code=unknown_email")
         raise _INVALID
+
+    # Audit: login success (standalone so audit failure never blocks)
+    try:
+        audit_standalone(
+            db,
+            user_id=user.id,
+            action=AuditAction.AUTH_LOGIN_SUCCESS,
+            entity_type=AuditEntity.USER,
+            entity_id=user.id,
+        )
+    except Exception:
+        logger.exception("audit_callsite_failed action=auth.login_success user_id=%d", user.id)
 
     token = create_access_token(
         user_id=user.id,

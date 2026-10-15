@@ -25,12 +25,13 @@ from collections.abc import Iterator
 
 from sqlalchemy.orm import Session
 
-from app.constants import VALIDATION_STATUS_PENDING
+from app.constants import AuditAction, AuditEntity, VALIDATION_STATUS_PENDING
 from app.models.application import Application, ApplicationStatus
 from app.models.assignment import Assignment
 from app.models.document import Document
 from app.models.officer import Officer
 from app.models.user import User
+from app.services.audit_service import record as audit_record
 from app.services.storage_service import AbstractStorage, StorageError
 
 logger = logging.getLogger(__name__)
@@ -187,6 +188,16 @@ def upload_document(
     )
     try:
         db.add(doc)
+        db.flush()  # get doc.id before audit row
+        # Audit: document.upload (same transaction as the document row)
+        audit_record(
+            db,
+            user_id=citizen_id,
+            action=AuditAction.DOCUMENT_UPLOAD,
+            entity_type=AuditEntity.DOCUMENT,
+            entity_id=doc.id,
+            details={"document_id": doc.id, "doc_type": doc_type},
+        )
         db.commit()
         db.refresh(doc)
     except Exception as exc:

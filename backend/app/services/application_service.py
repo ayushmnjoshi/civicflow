@@ -18,15 +18,17 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.ai.rules import get_required_doc_types
-from app.constants import Priority, VALIDATION_STATUS_INVALID, VALIDATION_STATUS_ERROR
+from app.constants import AuditAction, AuditEntity, Priority, VALIDATION_STATUS_INVALID, VALIDATION_STATUS_ERROR
 from app.models.application import Application, ApplicationStatus
 from app.models.application_status_history import ApplicationStatusHistory
 from app.models.assignment import Assignment
 from app.models.department import Department
 from app.models.document import Document
+from app.models.escalation import Escalation
 from app.models.officer import Officer
 from app.models.role import Role
 from app.models.user import User
+from app.services.audit_service import record as audit_record
 from app.services.state_machine import InvalidTransitionError, validate_transition
 from app.services.system_actor import get_system_user_id
 from app.services.rule_engine_service import apply_rules_on_create
@@ -105,6 +107,25 @@ def create_application(
             "application_id=%d reason_code=rule_engine_error", app.id
         )
 
+    # Gather rule-engine results for the audit row
+    priority_label = Priority(app.priority).label
+    # is_duplicate was set by apply_rules_on_create
+    _is_dup = bool(app.is_duplicate_flag)
+
+    # Audit: application.create (by citizen, same transaction)
+    audit_record(
+        db,
+        user_id=citizen_id,
+        action=AuditAction.APPLICATION_CREATE,
+        entity_type=AuditEntity.APPLICATION,
+        entity_id=app.id,
+        details={
+            "priority_label": priority_label,
+            "urgent": urgent,
+            "is_duplicate": _is_dup,
+        },
+    )
+
     # History row 1: citizen submitted the application
     _add_history(
         db,
@@ -112,6 +133,15 @@ def create_application(
         from_status=None,
         to_status=ApplicationStatus.SUBMITTED.value,
         changed_by=citizen_id,
+    )
+    # Audit: status change SUBMITTED (by citizen)
+    audit_record(
+        db,
+        user_id=citizen_id,
+        action=AuditAction.APPLICATION_STATUS_CHANGE,
+        entity_type=AuditEntity.APPLICATION,
+        entity_id=app.id,
+        details={"from_status": None, "to_status": ApplicationStatus.SUBMITTED.value},
     )
 
     # System auto-advance to DOCUMENT_PENDING
@@ -130,6 +160,18 @@ def create_application(
         from_status=ApplicationStatus.SUBMITTED.value,
         to_status=ApplicationStatus.DOCUMENT_PENDING.value,
         changed_by=system_user_id,
+    )
+    # Audit: status change DOCUMENT_PENDING (by system)
+    audit_record(
+        db,
+        user_id=system_user_id,
+        action=AuditAction.APPLICATION_STATUS_CHANGE,
+        entity_type=AuditEntity.APPLICATION,
+        entity_id=app.id,
+        details={
+            "from_status": ApplicationStatus.SUBMITTED.value,
+            "to_status": ApplicationStatus.DOCUMENT_PENDING.value,
+        },
     )
 
     db.commit()
@@ -181,10 +223,38 @@ def change_status(
         changed_by=changed_by,
         remarks=remarks,
     )
+    # Audit: status change (same transaction as history row)
+    audit_record(
+        db,
+        user_id=changed_by,
+        action=AuditAction.APPLICATION_STATUS_CHANGE,
+        entity_type=AuditEntity.APPLICATION,
+        entity_id=app.id,
+        details={"from_status": old_status, "to_status": new_status},
+    )
 
     # Resolve open escalations when a final status is reached (same transaction)
     if new_status in ("APPROVED", "REJECTED"):
+        # Find escalations BEFORE resolving them so we can audit each one
+        open_escalations: list[Escalation] = (
+            db.query(Escalation)
+            .filter(
+                Escalation.application_id == app.id,
+                Escalation.resolved_at.is_(None),
+            )
+            .all()
+        )
         resolve_escalations_for_application(db, app.id)
+        # Audit each resolved escalation (same transaction)
+        for esc in open_escalations:
+            audit_record(
+                db,
+                user_id=changed_by,
+                action=AuditAction.ESCALATION_RESOLVE,
+                entity_type=AuditEntity.ESCALATION,
+                entity_id=esc.id,
+                details={"escalation_id": esc.id},
+            )
 
     db.commit()
     db.refresh(app)
