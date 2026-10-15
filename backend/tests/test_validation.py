@@ -343,9 +343,10 @@ class TestApplicationFlow:
         assert r2.status_code == 201
 
         db_session.refresh(a)
-        assert a.status == ApplicationStatus.VALIDATED
+        # Auto-assignment may run immediately: accept VALIDATED or ASSIGNED
+        assert a.status in (ApplicationStatus.VALIDATED, ApplicationStatus.ASSIGNED)
 
-        # History: DOCUMENT_PENDING → VALIDATING → VALIDATED
+        # History: DOCUMENT_PENDING → VALIDATING → VALIDATED must always be present
         hist = self._history(db_session, a.id)
         to_statuses = [h.to_status for h in hist]
         assert "VALIDATING" in to_statuses

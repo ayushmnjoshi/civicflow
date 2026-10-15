@@ -379,7 +379,7 @@
         "tags": [
           "applications"
         ],
-        "summary": "Change application status (officer only)",
+        "summary": "Change application status (officer/admin)",
         "operationId": "update_status_applications__application_id__status_patch",
         "security": [
           {
@@ -414,6 +414,120 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApplicationDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/applications/{application_id}/decision": {
+      "post": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Approve or reject an application (assigned officer only)",
+        "operationId": "decide_application_applications__application_id__decision_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Application Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/applications/{application_id}/request-documents": {
+      "post": {
+        "tags": [
+          "applications"
+        ],
+        "summary": "Request additional documents (assigned officer only)",
+        "operationId": "request_documents_applications__application_id__request_documents_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "application_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Application Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestDocumentsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestDocumentsResponse"
                 }
               }
             }
@@ -532,6 +646,65 @@
           }
         }
       }
+    },
+    "/officer/queue": {
+      "get": {
+        "tags": [
+          "officer"
+        ],
+        "summary": "Get the calling officer's active application queue",
+        "description": "Return applications actively assigned to the calling officer.\n\n- Excludes APPROVED and REJECTED applications.\n- Optional `status` query param filters by a specific status (422 if unknown).\n- Sorted by priority descending, then created_at ascending.\n- If the user has role=officer but no officers row, returns [].",
+        "operationId": "get_officer_queue_officer_queue_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OfficerQueueItem"
+                  },
+                  "title": "Response Get Officer Queue Officer Queue Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -608,6 +781,17 @@
             "format": "date-time",
             "title": "Updated At"
           },
+          "applicant_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicant Name"
+          },
           "status_history": {
             "items": {
               "$ref": "#/components/schemas/StatusHistoryEntry"
@@ -655,6 +839,7 @@
           "is_duplicate_flag",
           "created_at",
           "updated_at",
+          "applicant_name",
           "status_history",
           "documents",
           "required_documents",
@@ -775,6 +960,47 @@
         "title": "CurrentUserResponse",
         "description": "200 response from GET /auth/me."
       },
+      "DecisionRequest": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "title": "Decision",
+            "description": "approve or reject"
+          },
+          "remarks": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Remarks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "decision",
+          "remarks"
+        ],
+        "title": "DecisionRequest",
+        "description": "POST /applications/{id}/decision body."
+      },
+      "DecisionResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "DecisionResponse",
+        "description": "POST /applications/{id}/decision response."
+      },
       "DepartmentResponse": {
         "properties": {
           "id": {
@@ -886,6 +1112,65 @@
         "title": "LoginRequest",
         "description": "POST /auth/login body."
       },
+      "OfficerQueueItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "service_type": {
+            "type": "string",
+            "title": "Service Type"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "priority": {
+            "type": "string",
+            "title": "Priority"
+          },
+          "is_duplicate_flag": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Duplicate Flag"
+          },
+          "applicant_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applicant Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "service_type",
+          "status",
+          "priority",
+          "is_duplicate_flag",
+          "applicant_name",
+          "created_at"
+        ],
+        "title": "OfficerQueueItem",
+        "description": "One item in GET /officer/queue."
+      },
       "RegisterRequest": {
         "properties": {
           "email": {
@@ -953,6 +1238,51 @@
         ],
         "title": "RegisterResponse",
         "description": "201 response from POST /auth/register."
+      },
+      "RequestDocumentsRequest": {
+        "properties": {
+          "doc_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "minItems": 1,
+            "title": "Doc Types"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "doc_types",
+          "reason"
+        ],
+        "title": "RequestDocumentsRequest",
+        "description": "POST /applications/{id}/request-documents body."
+      },
+      "RequestDocumentsResponse": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "RequestDocumentsResponse",
+        "description": "POST /applications/{id}/request-documents response."
       },
       "StatusHistoryEntry": {
         "properties": {

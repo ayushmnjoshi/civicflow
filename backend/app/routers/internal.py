@@ -26,6 +26,7 @@ from app.services.storage_service import AbstractStorage, get_storage
 from app.services.validation_service import process_document
 from app.services.application_service import get_required_documents_for_application
 from app.services.rule_engine_service import reevaluate_priorities
+from app.services.assignment_service import run_bulk_assign
 
 logger = logging.getLogger(__name__)
 
@@ -128,3 +129,18 @@ def run_validate(
 def reevaluate_priority(db: Session = Depends(get_db)) -> dict[str, int]:
     """Raise overdue non-terminal applications to HIGH priority."""
     return {"updated": reevaluate_priorities(db)}
+
+
+# ── POST /internal/assignments/run ────────────────────────────────────────────
+
+@router.post(
+    "/assignments/run",
+    include_in_schema=False,
+)
+def run_assignments(db: Session = Depends(get_db)) -> dict[str, int]:
+    """Assign all VALIDATED applications that have no active assignment.
+
+    Returns {"assigned": n, "still_unassigned": m}.
+    n8n can call this on a schedule.
+    """
+    return run_bulk_assign(db)

@@ -493,7 +493,7 @@ class TestPatchStatus:
         assert r.status_code == 200
         assert r.json()["status"] == "APPROVED"
 
-    def test_unassigned_officer_gets_404(self, client, db_session):
+    def test_unassigned_officer_gets_403(self, client, db_session):
         citizen = _make_user(db_session, "citizen", "patch_c4@test.dev")
         dept = _get_dept(db_session)
         body = _create_app_via_api(client, citizen, dept.id)
@@ -515,7 +515,7 @@ class TestPatchStatus:
             json={"new_status": "UNDER_REVIEW"},
             headers=_auth(unassigned),
         )
-        assert r.status_code == 404
+        assert r.status_code == 403
 
     def test_citizen_gets_403_on_patch(self, client, db_session):
         citizen = _make_user(db_session, "citizen", "patch_c5@test.dev")

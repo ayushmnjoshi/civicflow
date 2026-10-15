@@ -317,6 +317,16 @@ def _do_advance(db: Session, application_id: int) -> None:
     # ── VALIDATING → VALIDATED or ADDITIONAL_DOCUMENT_REQUIRED ───────────────
     if val["result"] == "VALIDATED":
         _transition(db, app, "VALIDATED", system_user_id)
+        db.commit()
+
+        # Auto-assign after validation — failures must never affect the upload response
+        try:
+            from app.services.assignment_service import assign_application
+            assign_application(db, app)
+        except Exception:
+            logger.exception(
+                "advance_application: assignment hook failed application_id=%d", app.id
+            )
     else:
         parts: list[str] = []
         if val["missing_docs"]:
@@ -325,5 +335,4 @@ def _do_advance(db: Session, application_id: int) -> None:
             parts.append("invalid:" + ",".join(val["invalid_docs"]))
         remarks = "; ".join(parts) or "validation_failed"
         _transition(db, app, "ADDITIONAL_DOCUMENT_REQUIRED", system_user_id, remarks)
-
-    db.commit()
+        db.commit()

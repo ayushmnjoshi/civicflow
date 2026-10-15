@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import settings
-from app.routers import applications, auth, departments, documents, health, internal
+from app.routers import applications, auth, departments, documents, health, internal, officer
 
 # ── logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -61,14 +61,30 @@ def create_app() -> FastAPI:
     async def validation_exception_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
-        logger.warning("Validation error on %s: %s", request.url, exc.errors())
+        # exc.errors() may contain non-JSON-serializable objects in ctx["error"]
+        # (e.g. ValueError instances from pydantic v2 field_validators).  Sanitise
+        # them to their string representation so JSONResponse never crashes.
+        def _safe_errors(errs: list) -> list:
+            safe = []
+            for e in errs:
+                e2 = dict(e)
+                if "ctx" in e2 and isinstance(e2["ctx"], dict):
+                    e2["ctx"] = {
+                        k: str(v) if not isinstance(v, (str, int, float, bool, type(None))) else v
+                        for k, v in e2["ctx"].items()
+                    }
+                safe.append(e2)
+            return safe
+
+        safe = _safe_errors(exc.errors())
+        logger.warning("Validation error on %s: %s", request.url, safe)
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={
                 "error": {
                     "code": status.HTTP_422_UNPROCESSABLE_ENTITY,
                     "message": "Request validation failed.",
-                    "detail": exc.errors(),
+                    "detail": safe,
                 }
             },
         )
@@ -126,6 +142,7 @@ def create_app() -> FastAPI:
     app.include_router(applications.router)
     app.include_router(documents.router)
     app.include_router(internal.router)
+    app.include_router(officer.router)
 
     return app
 

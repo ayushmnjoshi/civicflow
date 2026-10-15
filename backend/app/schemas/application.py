@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.document import DocumentSummary
 
@@ -50,6 +52,7 @@ class ApplicationResponse(BaseModel):
 class ApplicationDetailResponse(ApplicationResponse):
     """Application with full status history and document info (detail view)."""
 
+    applicant_name: str | None   # null for citizen viewers; full_name for staff
     status_history: list[StatusHistoryEntry]
     documents: list[DocumentSummary]
     required_documents: list[str]
@@ -76,3 +79,74 @@ class StatusUpdateRequest(BaseModel):
 
     new_status: str = Field(min_length=1)
     remarks: str | None = None
+
+
+# ── Officer queue ─────────────────────────────────────────────────────────────
+
+class OfficerQueueItem(BaseModel):
+    """One item in GET /officer/queue."""
+
+    id: int
+    service_type: str
+    status: str
+    priority: str            # label: "LOW" | "MEDIUM" | "HIGH"
+    is_duplicate_flag: bool | None
+    applicant_name: str | None
+    created_at: datetime
+
+
+# ── Decision ─────────────────────────────────────────────────────────────────
+
+_DOC_TYPE_RE = re.compile(r"^[A-Z0-9_]{1,50}$")
+
+
+class DecisionRequest(BaseModel):
+    """POST /applications/{id}/decision body."""
+
+    decision: str = Field(description="approve or reject")
+    remarks: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("decision")
+    @classmethod
+    def validate_decision(cls, v: str) -> str:
+        if v not in ("approve", "reject"):
+            raise ValueError("decision must be 'approve' or 'reject'")
+        return v
+
+
+class DecisionResponse(BaseModel):
+    """POST /applications/{id}/decision response."""
+
+    id: int
+    status: str
+
+
+# ── Request documents ─────────────────────────────────────────────────────────
+
+class RequestDocumentsRequest(BaseModel):
+    """POST /applications/{id}/request-documents body."""
+
+    doc_types: Annotated[list[str], Field(min_length=1, max_length=10)]
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("doc_types")
+    @classmethod
+    def validate_doc_types(cls, v: list[str]) -> list[str]:
+        seen: set[str] = set()
+        for dt in v:
+            if not _DOC_TYPE_RE.match(dt):
+                raise ValueError(
+                    f"Invalid doc_type '{dt}': must be uppercase letters, digits, "
+                    "or underscores, max 50 chars."
+                )
+            if dt in seen:
+                raise ValueError(f"Duplicate doc_type '{dt}'")
+            seen.add(dt)
+        return v
+
+
+class RequestDocumentsResponse(BaseModel):
+    """POST /applications/{id}/request-documents response."""
+
+    id: int
+    status: str

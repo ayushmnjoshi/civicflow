@@ -1,4 +1,4 @@
-"""Seed script — inserts roles, departments, and the system user.
+"""Seed script — inserts roles, departments, system user, and officer1.
 
 Usage (from backend/ directory):
     python -m database.seed
@@ -111,6 +111,46 @@ def seed() -> None:
             print("Inserted system user: system@civicflow.internal")
         else:
             print("System user already seeded — skipping.")
+
+        # ── officer1 ───────────────────────────────────────────────────────
+        # Ensures the seeded officer1 user has a row in the officers table.
+        # Uses the first seeded department (Municipal Corporation).
+        # Idempotent: checks by email before inserting.
+        existing_officer1 = session.execute(
+            text("SELECT id FROM users WHERE email = 'officer1@civicflow.dev'")
+        ).fetchone()
+
+        if existing_officer1 is not None:
+            officer1_user_id = existing_officer1[0]
+            # Check if officers row already exists for this user
+            existing_officer_row = session.execute(
+                text("SELECT id FROM officers WHERE user_id = :uid"),
+                {"uid": officer1_user_id},
+            ).fetchone()
+            if existing_officer_row is None:
+                # Insert the officers row
+                first_dept_id = session.execute(
+                    text("SELECT id FROM departments WHERE name = 'Municipal Corporation'")
+                ).scalar()
+                if first_dept_id is not None:
+                    session.execute(
+                        text(
+                            "INSERT INTO officers (user_id, department_id, designation)"
+                            " VALUES (:uid, :dept_id, :designation)"
+                        ),
+                        {
+                            "uid": officer1_user_id,
+                            "dept_id": first_dept_id,
+                            "designation": "Officer",
+                        },
+                    )
+                    print(f"Inserted officers row for officer1 (user_id={officer1_user_id}).")
+                else:
+                    print("Municipal Corporation department not found — cannot insert officer row.")
+            else:
+                print("officer1 officers row already exists — skipping.")
+        else:
+            print("officer1 user not found — run create_staff_user.py first.")
 
         session.commit()
         print("Seed complete.")

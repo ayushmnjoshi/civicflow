@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user, require_citizen, require_officer
 from app.constants import Priority
 from app.dependencies import get_db
-from app.models.application import Application
+from app.models.application import Application, ApplicationStatus
 from app.models.department import Department
 from app.models.officer import Officer
 from app.models.role import Role
@@ -19,6 +19,10 @@ from app.schemas.application import (
     ApplicationCreateRequest,
     ApplicationDetailResponse,
     ApplicationResponse,
+    DecisionRequest,
+    DecisionResponse,
+    RequestDocumentsRequest,
+    RequestDocumentsResponse,
     StatusHistoryEntry,
     StatusUpdateRequest,
 )
@@ -39,6 +43,14 @@ router = APIRouter(prefix="/applications", tags=["applications"])
 def _role_name(db: Session, user: User) -> str:
     role = db.get(Role, user.role_id)
     return role.name if role else ""
+
+
+def _get_applicant_name(db: Session, app: Application, viewer_role: str) -> str | None:
+    """Return the citizen's full_name for staff viewers; None for citizens."""
+    if viewer_role not in ("officer", "dept_head", "admin"):
+        return None
+    citizen = db.get(User, app.citizen_id)
+    return citizen.full_name if citizen else None
 
 
 def _to_response(app: Application, viewer_role: str) -> ApplicationResponse:
@@ -112,6 +124,7 @@ def _to_detail(
         ),
         created_at=app.created_at,
         updated_at=app.updated_at,
+        applicant_name=_get_applicant_name(db, app, viewer_role),
         status_history=history_entries,
         documents=doc_summaries,
         required_documents=required,
@@ -132,6 +145,24 @@ def _visible_to(db: Session, app: Application, user: User, role: str) -> bool:
         officer = db.query(Officer).filter(Officer.user_id == user.id).first()
         return officer is not None and app.department_id == officer.department_id
     return False
+
+
+def _require_active_assignment(
+    db: Session, app: Application | None, officer_user: User
+) -> Application:
+    """Return the application or raise 404/403 as appropriate for officer access."""
+    if app is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Application not found.",
+        )
+    assignment = svc.get_active_assignment_for_officer(db, app.id, officer_user.id)
+    if assignment is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to perform this action.",
+        )
+    return app
 
 
 # ── POST /applications ────────────────────────────────────────────────────────
@@ -237,22 +268,45 @@ def list_applications(
 @router.patch(
     "/{application_id}/status",
     response_model=ApplicationDetailResponse,
-    summary="Change application status (officer only)",
+    summary="Change application status (officer/admin)",
 )
 def update_status(
     application_id: int,
     payload: StatusUpdateRequest,
-    current_user: User = Depends(require_officer),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ApplicationDetailResponse:
+    role = _role_name(db, current_user)
+
+    # Only officer and admin can patch status
+    if role not in ("officer", "admin"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to perform this action.",
+        )
+
     app = svc.get_application_by_id(db, application_id)
 
-    # Officer must have an active assignment; return 404 if not
-    if app is None or svc.get_active_assignment_for_officer(db, app.id, current_user.id) is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Application not found.",
-        )
+    if role == "officer":
+        # Officer must have an active assignment; 403 if not
+        if app is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Application not found.",
+            )
+        assignment = svc.get_active_assignment_for_officer(db, app.id, current_user.id)
+        if assignment is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to perform this action.",
+            )
+    else:
+        # admin
+        if app is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Application not found.",
+            )
 
     # Validate remarks before hitting the state machine
     new_status = payload.new_status
@@ -293,3 +347,100 @@ def update_status(
     role = _role_name(db, current_user)
     history = svc.get_status_history(db, application_id)
     return _to_detail(db, updated, history, role)
+
+
+# ── POST /applications/{id}/decision ─────────────────────────────────────────
+
+@router.post(
+    "/{application_id}/decision",
+    response_model=DecisionResponse,
+    summary="Approve or reject an application (assigned officer only)",
+)
+def decide_application(
+    application_id: int,
+    payload: DecisionRequest,
+    current_user: User = Depends(require_officer),
+    db: Session = Depends(get_db),
+) -> DecisionResponse:
+    app = svc.get_application_by_id(db, application_id)
+    app = _require_active_assignment(db, app, current_user)
+
+    if app.status != ApplicationStatus.UNDER_REVIEW:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Application must be UNDER_REVIEW to make a decision; current status is {app.status.value}.",
+        )
+
+    new_status = "APPROVED" if payload.decision == "approve" else "REJECTED"
+    remarks = payload.remarks.strip()
+
+    try:
+        updated = svc.change_status(
+            db,
+            application_id=application_id,
+            new_status=new_status,
+            actor="officer",
+            changed_by=current_user.id,
+            remarks=remarks,
+        )
+    except InvalidTransitionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+
+    logger.info(
+        "application_id=%d reason_code=%s actor_id=%d",
+        application_id, new_status.lower(), current_user.id,
+    )
+    return DecisionResponse(id=updated.id, status=updated.status.value)
+
+
+# ── POST /applications/{id}/request-documents ─────────────────────────────────
+
+@router.post(
+    "/{application_id}/request-documents",
+    response_model=RequestDocumentsResponse,
+    summary="Request additional documents (assigned officer only)",
+)
+def request_documents(
+    application_id: int,
+    payload: RequestDocumentsRequest,
+    current_user: User = Depends(require_officer),
+    db: Session = Depends(get_db),
+) -> RequestDocumentsResponse:
+    # Known limitation: the requested doc_types are stored only in the history
+    # remarks field (not in a dedicated column). This is sufficient for
+    # audit purposes but does not allow programmatic retrieval of pending requests.
+    app = svc.get_application_by_id(db, application_id)
+    app = _require_active_assignment(db, app, current_user)
+
+    if app.status != ApplicationStatus.UNDER_REVIEW:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Application must be UNDER_REVIEW to request documents; current status is {app.status.value}.",
+        )
+
+    doc_list = ", ".join(payload.doc_types)
+    remarks = f"Requested: {doc_list}. Reason: {payload.reason}"
+
+    try:
+        updated = svc.change_status(
+            db,
+            application_id=application_id,
+            new_status="ADDITIONAL_DOCUMENT_REQUIRED",
+            actor="officer",
+            changed_by=current_user.id,
+            remarks=remarks,
+        )
+    except InvalidTransitionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        )
+
+    logger.info(
+        "application_id=%d reason_code=additional_document_requested actor_id=%d",
+        application_id, current_user.id,
+    )
+    return RequestDocumentsResponse(id=updated.id, status=updated.status.value)
