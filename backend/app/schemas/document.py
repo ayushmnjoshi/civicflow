@@ -63,3 +63,18 @@ class DocumentResponse(BaseModel):
     original_filename: str
     validation_status: str
     uploaded_at: datetime
+
+
+class DocumentAnalysisResponse(BaseModel):
+    """Response for GET /documents/{id}/analysis (staff-only).
+
+    Never exposes extracted_text.
+    extracted_fields already has ID numbers masked (stored masked in DB).
+    """
+
+    document_id: int
+    doc_type: str
+    validation_status: str
+    extracted_fields: dict | None
+    validation_result: dict | None
+    processed_at: datetime

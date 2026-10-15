@@ -202,7 +202,7 @@ def upload_document(
         raise exc
 
     # ── 6. Post-upload: OCR + advance (failures must never break 201) ─────────
-    _run_post_upload_hooks(db, storage, doc, ocr)
+    _run_post_upload_hooks(db, storage, doc, ocr, citizen_id=citizen_id)
 
     return doc
 
@@ -213,6 +213,8 @@ def _run_post_upload_hooks(
     storage: AbstractStorage,
     document: Document,
     ocr,
+    *,
+    citizen_id: int,
 ) -> None:
     """Run OCR validation and attempt to advance the application.
 
@@ -221,7 +223,11 @@ def _run_post_upload_hooks(
     The caller never sees errors from this function.
     Never logs OCR text or document content.
     """
-    from app.services.validation_service import advance_application, process_document
+    from app.services.validation_service import (
+        advance_application,
+        process_document,
+        re_upload_advance,
+    )
 
     try:
         process_document(db, document, storage, ocr)
@@ -235,6 +241,14 @@ def _run_post_upload_hooks(
     except Exception:
         logger.exception(
             "Post-upload: advance_application failed application_id=%d",
+            document.application_id,
+        )
+
+    try:
+        re_upload_advance(db, document.application_id, citizen_id)
+    except Exception:
+        logger.exception(
+            "Post-upload: re_upload_advance failed application_id=%d",
             document.application_id,
         )
 

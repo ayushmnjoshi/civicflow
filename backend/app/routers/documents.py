@@ -15,11 +15,12 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import get_current_user
 from app.config import settings
 from app.dependencies import get_db
+from app.models.ai_analysis import AIAnalysis
 from app.models.document import Document
 from app.models.role import Role
 from app.models.user import User
 from app.ocr.engine import AbstractOcrEngine, get_ocr_engine
-from app.schemas.document import DocumentUploadResponse
+from app.schemas.document import DocumentAnalysisResponse, DocumentUploadResponse
 from app.services import document_service as svc
 from app.services.document_service import FileValidationError
 from app.services.storage_service import AbstractStorage, StorageError, get_storage
@@ -171,4 +172,60 @@ def download_document(
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": "private, no-store",
         },
+    )
+
+
+# ── GET /documents/{id}/analysis ──────────────────────────────────────────────
+
+@router.get(
+    "/documents/{document_id}/analysis",
+    response_model=DocumentAnalysisResponse,
+    summary="View OCR analysis result for a document (assigned officer / admin only)",
+)
+def get_document_analysis(
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> DocumentAnalysisResponse:
+    """Return OCR/validation analysis for *document_id*.
+
+    Access rules:
+    - Admin: always allowed.
+    - Officer: only if they have an active assignment to the document's application.
+    - Everyone else (citizen, dept_head without assignment, unauthenticated): 403 or 401.
+
+    A document with no analysis row yet returns 404 in the standard error shape.
+    extracted_text is NEVER returned.
+    """
+    doc: Document | None = db.get(Document, document_id)
+    if doc is None:
+        raise _http_404("Document not found.")
+
+    role = _role_name(db, current_user)
+
+    # Citizens are never allowed — even the owning citizen
+    if role not in ("officer", "admin", "dept_head"):
+        raise _http_403()
+
+    # Officers must have an active assignment to the document's application
+    if role in ("officer", "dept_head"):
+        if not svc.can_access_document(db, doc, current_user, "officer"):
+            raise _http_403()
+
+    # Fetch analysis row — no extracted_text returned
+    analysis: AIAnalysis | None = (
+        db.query(AIAnalysis)
+        .filter(AIAnalysis.document_id == document_id)
+        .first()
+    )
+    if analysis is None:
+        raise _http_404("No analysis available for this document yet.")
+
+    return DocumentAnalysisResponse(
+        document_id=doc.id,
+        doc_type=doc.doc_type,
+        validation_status=doc.validation_status,
+        extracted_fields=analysis.extracted_fields,
+        validation_result=analysis.validation_result,
+        processed_at=analysis.processed_at,
     )

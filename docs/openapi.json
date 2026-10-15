@@ -647,6 +647,54 @@
         }
       }
     },
+    "/documents/{document_id}/analysis": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "summary": "View OCR analysis result for a document (assigned officer / admin only)",
+        "description": "Return OCR/validation analysis for *document_id*.\n\nAccess rules:\n- Admin: always allowed.\n- Officer: only if they have an active assignment to the document's application.\n- Everyone else (citizen, dept_head without assignment, unauthenticated): 403 or 401.\n\nA document with no analysis row yet returns 404 in the standard error shape.\nextracted_text is NEVER returned.",
+        "operationId": "get_document_analysis_documents__document_id__analysis_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentAnalysisResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/officer/queue": {
       "get": {
         "tags": [
@@ -1024,6 +1072,62 @@
         ],
         "title": "DepartmentResponse",
         "description": "One department entry."
+      },
+      "DocumentAnalysisResponse": {
+        "properties": {
+          "document_id": {
+            "type": "integer",
+            "title": "Document Id"
+          },
+          "doc_type": {
+            "type": "string",
+            "title": "Doc Type"
+          },
+          "validation_status": {
+            "type": "string",
+            "title": "Validation Status"
+          },
+          "extracted_fields": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extracted Fields"
+          },
+          "validation_result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Result"
+          },
+          "processed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Processed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "document_id",
+          "doc_type",
+          "validation_status",
+          "extracted_fields",
+          "validation_result",
+          "processed_at"
+        ],
+        "title": "DocumentAnalysisResponse",
+        "description": "Response for GET /documents/{id}/analysis (staff-only).\n\nNever exposes extracted_text.\nextracted_fields already has ID numbers masked (stored masked in DB)."
       },
       "DocumentSummary": {
         "properties": {

@@ -336,3 +336,156 @@ def _do_advance(db: Session, application_id: int) -> None:
         remarks = "; ".join(parts) or "validation_failed"
         _transition(db, app, "ADDITIONAL_DOCUMENT_REQUIRED", system_user_id, remarks)
         db.commit()
+
+
+# ── re_upload_advance ─────────────────────────────────────────────────────────
+
+def re_upload_advance(db: Session, application_id: int, citizen_id: int) -> None:
+    """Handle a citizen re-upload when the application is ADDITIONAL_DOCUMENT_REQUIRED.
+
+    OFFICER path (active assignment exists):
+        ADR -> DOCUMENT_UPLOADED (citizen) -> UNDER_REVIEW (system).
+        Assignment is left unchanged.
+        NOTE (known limitation): requested doc_types are not persisted, so the
+        first re-upload returns the application to UNDER_REVIEW regardless of
+        which type was uploaded.
+
+    SYSTEM path (no active assignment):
+        Only when every required doc_type has at least one uploaded document.
+        ADR -> DOCUMENT_UPLOADED (citizen) -> VALIDATING (system) ->
+            VALIDATED (system, then auto-assign) or ADR (system, with reason codes).
+        If required types are still missing nothing happens.
+
+    Never raises to caller — errors are logged.
+    """
+    try:
+        _do_re_upload(db, application_id, citizen_id)
+    except Exception:
+        logger.exception(
+            "re_upload_advance: unexpected error application_id=%d", application_id
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def _do_re_upload(db: Session, application_id: int, citizen_id: int) -> None:
+    """Internal implementation — may raise; caller handles rollback."""
+    from app.models.application_status_history import ApplicationStatusHistory
+    from app.models.assignment import Assignment
+
+    # Lock the row
+    app = (
+        db.query(Application)
+        .filter(Application.id == application_id)
+        .with_for_update()
+        .first()
+    )
+    if app is None:
+        return
+    if app.status != ApplicationStatus.ADDITIONAL_DOCUMENT_REQUIRED:
+        return
+
+    system_user_id = get_system_user_id(db)
+
+    # ── ADR -> DOCUMENT_UPLOADED (citizen actor) ──────────────────────────────
+    from app.services.state_machine import validate_transition as _vt
+    old_status = app.status.value
+    _vt(old_status, "DOCUMENT_UPLOADED", actor="citizen")
+    app.status = ApplicationStatus("DOCUMENT_UPLOADED")
+    app.updated_at = func.now()
+    db.add(ApplicationStatusHistory(
+        application_id=app.id,
+        from_status=old_status,
+        to_status="DOCUMENT_UPLOADED",
+        changed_by=citizen_id,
+    ))
+    db.flush()
+
+    # ── Determine path: active officer assignment? ────────────────────────────
+    active_assignment = (
+        db.query(Assignment)
+        .filter(
+            Assignment.application_id == application_id,
+            Assignment.unassigned_at.is_(None),
+        )
+        .first()
+    )
+
+    if active_assignment is not None:
+        # OFFICER PATH: DOCUMENT_UPLOADED -> UNDER_REVIEW (system)
+        _transition(db, app, "UNDER_REVIEW", system_user_id)
+        db.commit()
+        logger.info(
+            "re_upload_advance: officer path application_id=%d -> UNDER_REVIEW",
+            application_id,
+        )
+        return
+
+    # ── SYSTEM PATH: check all required types are present ────────────────────
+    dept = db.get(Department, app.department_id)
+    dept_service_type = dept.service_type if dept is not None else ""
+    required = [r.strip().upper() for r in get_required_doc_types(dept_service_type)]
+
+    docs = (
+        db.query(Document)
+        .filter(Document.application_id == application_id)
+        .all()
+    )
+    by_type: dict[str, list[Document]] = {}
+    for doc in docs:
+        by_type.setdefault(doc.doc_type.strip().upper(), []).append(doc)
+
+    if not all(r in by_type for r in required):
+        # Required types still missing — roll back DOCUMENT_UPLOADED, stay at ADR
+        db.rollback()
+        logger.info(
+            "re_upload_advance: required docs still missing application_id=%d — no transition",
+            application_id,
+        )
+        return
+
+    # ── DOCUMENT_UPLOADED -> VALIDATING (system) ──────────────────────────────
+    _transition(db, app, "VALIDATING", system_user_id)
+    db.flush()
+
+    # Build doc dicts for validate_application (all uploaded docs)
+    doc_dicts = [
+        {
+            "id": doc.id,
+            "doc_type": doc.doc_type.strip().upper(),
+            "validation_status": doc.validation_status,
+        }
+        for doc in docs
+    ]
+    val = validate_application(required, doc_dicts)
+
+    if val["result"] == "VALIDATED":
+        _transition(db, app, "VALIDATED", system_user_id)
+        db.commit()
+        logger.info(
+            "re_upload_advance: system path application_id=%d -> VALIDATED",
+            application_id,
+        )
+        # Auto-assign — failures must not affect the upload response
+        try:
+            from app.services.assignment_service import assign_application
+            assign_application(db, app)
+        except Exception:
+            logger.exception(
+                "re_upload_advance: assignment hook failed application_id=%d", app.id
+            )
+    else:
+        parts: list[str] = []
+        if val["missing_docs"]:
+            parts.append("missing:" + ",".join(val["missing_docs"]))
+        if val["invalid_docs"]:
+            parts.append("invalid:" + ",".join(val["invalid_docs"]))
+        remarks = "; ".join(parts) or "validation_failed"
+        _transition(db, app, "ADDITIONAL_DOCUMENT_REQUIRED", system_user_id, remarks)
+        db.commit()
+        logger.info(
+            "re_upload_advance: system path application_id=%d -> ADDITIONAL_DOCUMENT_REQUIRED reason=%s",
+            application_id, remarks,
+        )
