@@ -31,6 +31,7 @@ from app.services.state_machine import InvalidTransitionError, validate_transiti
 from app.services.system_actor import get_system_user_id
 from app.services.rule_engine_service import apply_rules_on_create
 from app.services.event_service import emit_application_event
+from app.services.workflow_service import resolve_escalations_for_application
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +181,10 @@ def change_status(
         changed_by=changed_by,
         remarks=remarks,
     )
+
+    # Resolve open escalations when a final status is reached (same transaction)
+    if new_status in ("APPROVED", "REJECTED"):
+        resolve_escalations_for_application(db, app.id)
 
     db.commit()
     db.refresh(app)

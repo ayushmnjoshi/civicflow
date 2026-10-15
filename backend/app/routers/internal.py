@@ -34,6 +34,15 @@ from app.services.validation_service import process_document
 from app.services.application_service import get_required_documents_for_application
 from app.services.rule_engine_service import reevaluate_priorities
 from app.services.assignment_service import run_bulk_assign
+from app.services.workflow_service import (
+    pending_check,
+    create_escalation,
+)
+from app.schemas.workflow import (
+    PendingCheckItem,
+    EscalationCreateRequest,
+    EscalationCreateResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -264,3 +273,80 @@ def send_notification(
         )
 
     return NotificationSendResponse(notification_id=notif.id, status="sent")
+
+
+# ── GET /internal/applications/pending-check ──────────────────────────────────
+
+@router.get(
+    "/applications/pending-check",
+    response_model=list[PendingCheckItem],
+    include_in_schema=False,
+)
+def get_pending_check(
+    kind: str,
+    threshold_hours: int,
+    db: Session = Depends(get_db),
+) -> list[PendingCheckItem]:
+    """Return non-terminal applications that have been in their current status
+    for at least threshold_hours whole hours.
+
+    kind: "reminder" | "escalation"
+    threshold_hours: 1–8760
+    """
+    if kind not in ("reminder", "escalation"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="kind must be 'reminder' or 'escalation'.",
+        )
+    if not (1 <= threshold_hours <= 8760):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="threshold_hours must be between 1 and 8760.",
+        )
+
+    results = pending_check(db, kind=kind, threshold_hours=threshold_hours)
+    return [PendingCheckItem(**r) for r in results]
+
+
+# ── POST /internal/escalations ────────────────────────────────────────────────
+
+@router.post(
+    "/escalations",
+    response_model=EscalationCreateResponse,
+    include_in_schema=False,
+)
+def create_escalation_endpoint(
+    body: EscalationCreateRequest,
+    db: Session = Depends(get_db),
+) -> EscalationCreateResponse:
+    """Create (or return existing) unresolved escalation for an application.
+
+    Idempotent: a second call with the same application returns the same
+    escalation_id and does not insert a new row.
+    """
+    try:
+        escalation = create_escalation(
+            db,
+            application_id=body.application_id,
+            reason=body.reason,
+        )
+    except ValueError as exc:
+        reason = str(exc)
+        if reason == "not_found":
+            raise _http_404("Application not found.")
+        if reason == "final":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Application is already in a final status (APPROVED or REJECTED).",
+            )
+        if reason == "no_target":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="no escalation target",
+            )
+        raise
+
+    return EscalationCreateResponse(
+        escalation_id=escalation.id,
+        escalated_to_user_id=escalation.escalated_to,
+    )
